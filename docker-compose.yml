@@ -1,0 +1,110 @@
+services:
+  qdrant:
+    image: qdrant/qdrant:v1.14.1
+    platform: linux/amd64
+    container_name: qdrant
+    volumes:
+      - qdrant_data:/qdrant/storage
+    environment:
+      - RUST_LOG=warn
+      - QDRANT__TELEMETRY_DISABLED=true 
+      - QDRANT__LOG_LEVEL=WARN
+      - GRPC_VERBOSITY=ERROR
+      - GRPC_TRACE= 
+      - TZ=Asia/Kolkata
+    ports:
+      - ${QDRANT_PORT:-6333}:6333
+      - ${QDRANT_GRPC_PORT:-6334}:6334
+    networks:
+      - cogentapp_network
+    restart: unless-stopped
+
+  redis:
+    image: redis:8.2-rc1-alpine3.22
+    platform: linux/amd64
+    container_name: redis
+    command: ["redis-server", "--loglevel", "warning"]
+    environment:
+      - TZ=Asia/Kolkata
+    ports:
+      - ${REDIS_PORT:-6379}:6379
+    networks:
+      - cogentapp_network
+    restart: unless-stopped
+
+  postgres:
+    image: postgres:15
+    platform: linux/amd64
+    container_name: postgres
+    environment:
+      - POSTGRES_USER=${POSTGRES_USER}
+      - POSTGRES_PASSWORD=${POSTGRES_PASSWORD}
+      - POSTGRES_DB=${POSTGRES_DB}
+      - TZ=Asia/Kolkata
+    command: >
+      postgres
+      -c log_statement=none
+      -c log_min_messages=warning
+      -c log_min_error_statement=error
+      -c log_min_duration_statement=-1  
+    ports:
+      - ${POSTGRES_PORT:-5432}:5432
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    networks:
+      - cogentapp_network
+    restart: unless-stopped    
+
+  cogent_app:
+    build:
+      context: .
+      platforms:
+        - linux/amd64
+    container_name: cogent_app
+    ports:
+      - ${APP_PORT:-5000}:5000
+    volumes:
+      - uploads-data:/tmp/uploads
+    environment:
+      - APP_PORT=5000
+      - TZ=Asia/Kolkata
+      - QDRANT_HOST=${QDRANT_HOST}
+      - QDRANT_PORT=${QDRANT_PORT}
+      - QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT}
+    depends_on:
+      - redis
+      - qdrant
+      - postgres
+    networks:
+      - cogentapp_network
+    restart: unless-stopped
+
+  arq_worker:
+    build:
+      context: .
+    platform: linux/amd64
+    container_name: arq_worker
+    command: python arq_worker.py
+    volumes:
+      - uploads-data:/tmp/uploads
+    depends_on:
+      - redis
+      - cogent_app
+    environment:
+      - TZ=Asia/Kolkata
+      - PYTHONPATH=/cogent_app
+      - QDRANT_HOST=${QDRANT_HOST}
+      - QDRANT_PORT=${QDRANT_PORT}
+      - QDRANT_GRPC_PORT=${QDRANT_GRPC_PORT}
+    networks:
+      - cogentapp_network
+    restart: unless-stopped
+
+networks:
+  cogentapp_network:
+    driver: bridge
+
+volumes:
+  uploads-data:
+  qdrant_data:
+  pgdata:
